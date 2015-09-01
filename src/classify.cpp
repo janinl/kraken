@@ -22,6 +22,8 @@
 #include "krakenutil.hpp"
 #include "quickfile.hpp"
 #include "seqreader.hpp"
+#include<iterator>
+#include<unordered_map>
 
 const size_t DEF_WORK_UNIT_SIZE = 500000;
 
@@ -31,7 +33,7 @@ using namespace kraken;
 void parse_command_line(int argc, char **argv);
 void usage(int exit_code=EX_USAGE);
 void process_file(char *filename);
-void classify_sequence(DNASequence &dna, ostringstream &koss,
+unordered_map<uint32_t, unordered_map<uint64_t, int>> classify_sequence(DNASequence &dna, ostringstream &koss,
                        ostringstream &coss, ostringstream &uoss);
 string hitlist_string(vector<uint32_t> &taxa, vector<uint8_t> &ambig);
 set<uint32_t> get_ancestry(uint32_t taxon);
@@ -64,7 +66,8 @@ int main(int argc, char **argv) {
   omp_set_num_threads(1);
   #endif
 
-  parse_command_line(argc, argv);
+cout << "classify main" << endl;  
+parse_command_line(argc, argv);
   if (! Nodes_filename.empty())
     Parent_map = build_parent_map(Nodes_filename);
 
@@ -147,160 +150,247 @@ void report_stats(struct timeval time1, struct timeval time2) {
 }
 
 void process_file(char *filename) {
-  string file_str(filename);
-  DNASequenceReader *reader;
-  DNASequence dna;
-
-  if (Fastq_input)
-    reader = new FastqReader(file_str);
-  else
-    reader = new FastaReader(file_str);
-
-  #pragma omp parallel
-  {
-    vector<DNASequence> work_unit;
-    ostringstream kraken_output_ss, classified_output_ss, unclassified_output_ss;
-
-    while (reader->is_valid()) {
-      work_unit.clear();
-      size_t total_nt = 0;
-      #pragma omp critical(get_input)
-      {
-        while (total_nt < Work_unit_size) {
-          dna = reader->next_sequence();
-          if (! reader->is_valid())
-            break;
-          work_unit.push_back(dna);
-          total_nt += dna.seq.size();
-        }
-      }
-      if (total_nt == 0)
-        break;
-      
-      kraken_output_ss.str("");
-      classified_output_ss.str("");
-      unclassified_output_ss.str("");
-      for (size_t j = 0; j < work_unit.size(); j++)
-        classify_sequence( work_unit[j], kraken_output_ss,
-                           classified_output_ss, unclassified_output_ss );
-
-      #pragma omp critical(write_output)
-      {
-        if (Print_kraken)
-          (*Kraken_output) << kraken_output_ss.str();
-        if (Print_classified)
-          (*Classified_output) << classified_output_ss.str();
-        if (Print_unclassified)
-          (*Unclassified_output) << unclassified_output_ss.str();
-        total_sequences += work_unit.size();
-        total_bases += total_nt;
-        cerr << "\rProcessed " << total_sequences << " sequences (" << total_bases << " bp) ...";
-      }
-    }
-  }  // end parallel section
-
-  delete reader;
+	string file_str(filename);
+	DNASequenceReader *reader;
+	DNASequence dna;
+	unordered_map<uint32_t, unordered_map<uint64_t, int>> predictedTaxIdsToKmerCounts;
+	
+	if (Fastq_input)
+		reader = new FastqReader(file_str);
+	else
+		reader = new FastaReader(file_str);
+		
+	#pragma omp parallel
+	{
+		vector<DNASequence> work_unit;
+		ostringstream kraken_output_ss, classified_output_ss, unclassified_output_ss;
+		
+		while (reader->is_valid()) {
+			work_unit.clear();
+			size_t total_nt = 0;
+			#pragma omp critical(get_input)
+			{
+				while (total_nt < Work_unit_size) {
+					dna = reader->next_sequence();
+					if (! reader->is_valid())
+						break;
+					work_unit.push_back(dna);
+					total_nt += dna.seq.size();
+				}
+			}
+			if (total_nt == 0)
+				break;
+		
+			kraken_output_ss.str("");
+			classified_output_ss.str("");
+			unclassified_output_ss.str("");
+		
+			for (size_t j = 0; j < work_unit.size(); j++) {
+				unordered_map<uint32_t, unordered_map<uint64_t, int>> currentTaxIdToKmerCounts = 
+								classify_sequence( work_unit[j], kraken_output_ss,
+								classified_output_ss, unclassified_output_ss);
+				//better: return outcome of classify_sequence as a struct of uint32_t and unordered_map<uint64_t, int>
+				if (!currentTaxIdToKmerCounts.empty()) {
+					for (auto &currentTaxIdKmerCount : currentTaxIdToKmerCounts) {
+						uint32_t currentTaxId = currentTaxIdKmerCount.first;
+						unordered_map<uint64_t, int> currentKmerCounts = currentTaxIdKmerCount.second;
+						//if current tax id not in the overall taxIds map:
+						if (predictedTaxIdsToKmerCounts.find(currentTaxId) == predictedTaxIdsToKmerCounts.end()) {
+							predictedTaxIdsToKmerCounts[currentTaxId] = currentKmerCounts;
+						}
+						//if it's already there: 
+						else {
+							unordered_map<uint64_t, int> storedKmerCounts = predictedTaxIdsToKmerCounts[currentTaxId];
+							for (auto &kmerCounts: currentKmerCounts) {
+								uint64_t kmerIndex = kmerCounts.first;
+								int kmerCount = kmerCounts.second;
+								//if kmer not stored put it in the map:
+								if (storedKmerCounts.find(kmerIndex) == storedKmerCounts.end()) {
+									storedKmerCounts[kmerIndex] = kmerCount;
+								}
+								//else increase the count with the current count:
+								else {
+									storedKmerCounts[kmerIndex] += kmerCount;
+								}
+							}
+							predictedTaxIdsToKmerCounts[currentTaxId] = storedKmerCounts;
+						}
+					}
+				}
+			}
+			#pragma omp critical(write_output)
+			{
+				if (Print_kraken)
+					(*Kraken_output) << kraken_output_ss.str();
+					// (*Kraken_output) << "output" << endl;
+				if (Print_classified)
+					(*Classified_output) << classified_output_ss.str();
+				if (Print_unclassified)
+					(*Unclassified_output) << unclassified_output_ss.str();
+					total_sequences += work_unit.size();
+					total_bases += total_nt;
+					cerr << "\rProcessed " << total_sequences << " sequences (" << total_bases << " bp) ...";
+				}
+			}
+		}  // end parallel section
+	delete reader;
+	
+	//go through predictedTaxIdsToKmerCounts and compute the KL divergence for each taxID/genus:
+	/*if (!predictedTaxIdsToKmerCounts.empty()) {
+		for (auto &predictedTaxId : predictedTaxIdsToKmerCounts) {
+			cout << predictedTaxId.first << endl;
+			unordered_map<uint64_t, int> kmerCounts = predictedTaxIdsToKmerCounts[predictedTaxId.first];
+			for (auto &kmerCount : kmerCounts) {
+				cout << kmerCount.first << " : " << kmerCount.second << endl;
+			}
+		}
+		//return predictedTaxIdToKmerCount;
+	}
+	*/
 }
 
-void classify_sequence(DNASequence &dna, ostringstream &koss,
+unordered_map<uint32_t, unordered_map<uint64_t, int>> classify_sequence(DNASequence &dna, ostringstream &koss,
                        ostringstream &coss, ostringstream &uoss) {
-  vector<uint32_t> taxa;
-  vector<uint8_t> ambig_list;
-  map<uint32_t, uint32_t> hit_counts;
-  uint64_t *kmer_ptr;
-  uint32_t taxon = 0;
-  uint32_t hits = 0;  // only maintained if in quick mode
+	vector<uint32_t> taxa;
+	vector<uint8_t> ambig_list;
+	map<uint32_t, uint32_t> hit_counts;
+	uint64_t *kmer_ptr;
+	uint32_t taxon = 0;
+	uint32_t hits = 0;  // only maintained if in quick mode
+	
+	uint64_t current_bin_key;
+	int64_t current_min_pos = 1;
+	int64_t current_max_pos = 0;
+	
+	vector<uint64_t> kmers;
+	string dnaHeader = "";
+	
+	unordered_map<uint32_t, unordered_map<uint64_t, int>> predictedTaxIdToKmerCount;
+	unordered_map<uint64_t, int> kmerIndexCount;
+	
+	if (dna.seq.size() >= Database.get_k()) {
+		dnaHeader = dna.header_line;
+		KmerScanner scanner(dna.seq);
+		
+		while ((kmer_ptr = scanner.next_kmer()) != NULL) {
+			taxon = 0;
+			if (scanner.ambig_kmer()) {
+				ambig_list.push_back(1);
+			}
+			else {
+				ambig_list.push_back(0);
+				uint32_t *val_ptr = Database.kmer_query(
+									Database.canonical_representation(*kmer_ptr),
+									&current_bin_key,
+									&current_min_pos, &current_max_pos
+									);
+				//koss << Database.canonical_representation(*kmer_ptr) << " ";
+				taxon = val_ptr ? *val_ptr : 0;
+				if (taxon) {
+					uint64_t kmerIndex = Database.canonical_representation(*kmer_ptr);
+					//kmers.push_back(Database.canonical_representation(*kmer_ptr));
+					if (kmerIndexCount.find(kmerIndex) == kmerIndexCount.end()) {
+						kmerIndexCount.insert(pair<uint64_t, int>(kmerIndex, 1));
+					}
+					else {
+						kmerIndexCount[kmerIndex] += 1;
+					}
+					hit_counts[taxon]++;
+					if (Quick_mode && ++hits >= Minimum_hit_count)
+						break;
+				}
+			}
+			taxa.push_back(taxon);
+		}
+	}
+	
+	uint32_t call = 0;
+	if (Quick_mode)
+		call = hits >= Minimum_hit_count ? taxon : 0;
+	else
+		call = resolve_tree(hit_counts, Parent_map);
+		
+	if (call)
+		#pragma omp atomic
+		total_classified++;
+		
+	if (Print_unclassified || Print_classified) {
+		ostringstream *oss_ptr = call ? &coss : &uoss;
+		bool print = call ? Print_classified : Print_unclassified;
+		if (print) {
+			if (Fastq_input) {
+				(*oss_ptr) << "@" << dna.header_line << endl
+					<< dna.seq << endl
+					<< "+" << endl
+					<< dna.quals << endl;
+			}
+			else {
+				(*oss_ptr) << ">" << dna.header_line << endl
+					<< dna.seq << endl;
+			}
+		}
+	}
 
-  uint64_t current_bin_key;
-  int64_t current_min_pos = 1;
-  int64_t current_max_pos = 0;
+	if (! Print_kraken)
+		exit(1);
 
-  if (dna.seq.size() >= Database.get_k()) {
-    KmerScanner scanner(dna.seq);
-    while ((kmer_ptr = scanner.next_kmer()) != NULL) {
-      taxon = 0;
-      if (scanner.ambig_kmer()) {
-        ambig_list.push_back(1);
-      }
-      else {
-        ambig_list.push_back(0);
-        uint32_t *val_ptr = Database.kmer_query(
-                              Database.canonical_representation(*kmer_ptr),
-                              &current_bin_key,
-                              &current_min_pos, &current_max_pos
-                            );
-        taxon = val_ptr ? *val_ptr : 0;
-        if (taxon) {
-          hit_counts[taxon]++;
-          if (Quick_mode && ++hits >= Minimum_hit_count)
-            break;
-        }
-      }
-      taxa.push_back(taxon);
-    }
-  }
+	if (call) {
+		koss << endl;
+		koss << "C\t";
+	}
+	
+	else {
+		if (Only_classified_kraken_output)
+			exit(1); //return;
+		koss << endl;
+		koss << "U\t";
+	}
+	koss << dna.id << "\t" << "call: " << call << "\t" << dna.seq.size() << "\t";
 
-  uint32_t call = 0;
-  if (Quick_mode)
-    call = hits >= Minimum_hit_count ? taxon : 0;
-  else
-    call = resolve_tree(hit_counts, Parent_map);
+	if (Quick_mode) {
+		koss << "Q:" << hits;
+	}
+ 
+	else {
+		if (taxa.empty())
+			koss << "0:0";
+		else
+			koss << hitlist_string(taxa, ambig_list);
+	}
+	
+	if (call) {
+		koss << endl << dnaHeader << endl;
+		predictedTaxIdToKmerCount[call] = kmerIndexCount;
+		if (!kmers.empty()) {
+			copy(kmers.begin(), kmers.end()-1, ostream_iterator<uint64_t>(koss, " "));
+			koss << kmers.back();
+		}
+	}
+	
+	if (!predictedTaxIdToKmerCount.empty()) {
+		for (auto &predictedTaxId : predictedTaxIdToKmerCount) {
+			cout << predictedTaxId.first << endl;
+			unordered_map<uint64_t, int> kmerCounts = predictedTaxIdToKmerCount[predictedTaxId.first];
+			for (auto &kmerCount : kmerCounts) {
+				cout << kmerCount.first << " : " << kmerCount.second << endl;
+			}
+		}
+		return predictedTaxIdToKmerCount;
+	}
 
-  if (call)
-    #pragma omp atomic
-    total_classified++;
-
-  if (Print_unclassified || Print_classified) {
-    ostringstream *oss_ptr = call ? &coss : &uoss;
-    bool print = call ? Print_classified : Print_unclassified;
-    if (print) {
-      if (Fastq_input) {
-        (*oss_ptr) << "@" << dna.header_line << endl
-            << dna.seq << endl
-            << "+" << endl
-            << dna.quals << endl;
-      }
-      else {
-        (*oss_ptr) << ">" << dna.header_line << endl
-            << dna.seq << endl;
-      }
-    }
-  }
-
-  if (! Print_kraken)
-    return;
-
-  if (call) {
-    koss << "C\t";
-  }
-  else {
-    if (Only_classified_kraken_output)
-      return;
-    koss << "U\t";
-  }
-  koss << dna.id << "\t" << call << "\t" << dna.seq.size() << "\t";
-
-  if (Quick_mode) {
-    koss << "Q:" << hits;
-  }
-  else {
-    if (taxa.empty())
-      koss << "0:0";
-    else
-      koss << hitlist_string(taxa, ambig_list);
-  }
-
-  koss << endl;
+	else {
+		return unordered_map<uint32_t, unordered_map<uint64_t, int>>();
+	}
 }
 
-string hitlist_string(vector<uint32_t> &taxa, vector<uint8_t> &ambig)
-{
-  int64_t last_code;
-  int code_count = 1;
-  ostringstream hitlist;
 
-  if (ambig[0])   { last_code = -1; }
-  else            { last_code = taxa[0]; }
+string hitlist_string(vector<uint32_t> &taxa, vector<uint8_t> &ambig) {
+	int64_t last_code;
+	int code_count = 1;
+	ostringstream hitlist;
+
+	if (ambig[0])   { last_code = -1; }
+	else            { last_code = taxa[0]; }
 
   for (size_t i = 1; i < taxa.size(); i++) {
     int64_t code;
@@ -342,7 +432,7 @@ set<uint32_t> get_ancestry(uint32_t taxon) {
 
 void parse_command_line(int argc, char **argv) {
   int opt;
-  long long sig;
+  int sig;
 
   if (argc > 1 && strcmp(argv[1], "-h") == 0)
     usage(0);
@@ -355,12 +445,10 @@ void parse_command_line(int argc, char **argv) {
         Index_filename = optarg;
         break;
       case 't' :
-        sig = atoll(optarg);
+        sig = atoi(optarg);
         if (sig <= 0)
           errx(EX_USAGE, "can't use nonpositive thread count");
         #ifdef _OPENMP
-        if (sig > omp_get_num_procs())
-          errx(EX_USAGE, "thread count exceeds number of processors");
         Num_threads = sig;
         omp_set_num_threads(Num_threads);
         #endif
@@ -372,7 +460,7 @@ void parse_command_line(int argc, char **argv) {
         Quick_mode = true;
         break;
       case 'm' :
-        sig = atoll(optarg);
+        sig = atoi(optarg);
         if (sig <= 0)
           errx(EX_USAGE, "can't use nonpositive minimum hit count");
         Minimum_hit_count = sig;
@@ -395,7 +483,7 @@ void parse_command_line(int argc, char **argv) {
         Kraken_output_file = optarg;
         break;
       case 'u' :
-        sig = atoll(optarg);
+        sig = atoi(optarg);
         if (sig <= 0)
           errx(EX_USAGE, "can't use nonpositive work unit size");
         Work_unit_size = sig;
