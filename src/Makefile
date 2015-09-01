@@ -1,13 +1,13 @@
-CXX = g++
-CXXFLAGS = -Wall -fopenmp -O3
+CXX = /illumina/thirdparty/gcc/gcc-4.9.2/bin/g++
+CXXFLAGS = -Wall -fopenmp -O3 -std=c++11
 PROGS = db_sort set_lcas classify make_seqid_to_taxid_map db_shrink
 
 .PHONY: all install clean
 
-all: $(PROGS)
+all: $(PROGS)  
 
-install: $(PROGS)
-	cp $(PROGS) $(KRAKEN_DIR)/
+install: $(PROGS) 
+	cp $(PROGS) /home/avoicu/kraken-0.10.5-beta/
 
 clean:
 	rm -f $(PROGS) *.o
@@ -18,7 +18,7 @@ db_sort: krakendb.o quickfile.o
 
 set_lcas: krakendb.o quickfile.o krakenutil.o seqreader.o
 
-classify: krakendb.o quickfile.o krakenutil.o seqreader.o
+classify: krakendb.o quickfile.o krakenutil.o seqreader.o 
 
 make_seqid_to_taxid_map: quickfile.o
 
