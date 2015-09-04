@@ -39,15 +39,17 @@
 #include<stdio.h>
 #include<string.h>
 #include<algorithm>
+#include <stdio.h>      
+#include <stdlib.h>
 
-#include<EXTERN.h> 
-#include<perl.h> 
+//#include<EXTERN.h> 
+//#include<perl.h> 
 
 
 using namespace std;
 using namespace kraken;
 
-
+/*
 EXTERN_C void boot_DynaLoader (pTHX_ CV* cv);
 
 EXTERN_C void xs_init(pTHX) {
@@ -55,9 +57,10 @@ EXTERN_C void xs_init(pTHX) {
 	newXS("DynaLoader::boot_DynaLoader", boot_DynaLoader, file);
 }
 
-const size_t DEF_WORK_UNIT_SIZE = 500000;
-
-
+*/
+//const size_t DEF_WORK_UNIT_SIZE = 500000;
+const size_t DEF_WORK_UNIT_SIZE = 100;
+/*
 static PerlInterpreter *my_perl;
 STRLEN strLength;
 
@@ -110,13 +113,14 @@ string getGenusName(uint64_t predictedTaxID) {
 	taxID += o.str();
 	strcat(getGenusForPredictedTaxID, taxID.c_str());
 	strcat(getGenusForPredictedTaxID, ",\"genus\");");
-	cout << getGenusForPredictedTaxID << endl;
+	//cout << getGenusForPredictedTaxID << endl;
 	eval_pv(getGenusForPredictedTaxID, TRUE);
 	const char *genusName = SvPV(get_sv("predictedGenus", FALSE), strLength);
-	
+	//eval_pv("$predictedGenus = undef;", TRUE);
 	return genusName;
 }
 
+*/
 
 void parse_command_line(int argc, char **argv);
 void usage(int exit_code=EX_USAGE);
@@ -149,13 +153,16 @@ uint64_t total_classified = 0;
 uint64_t total_sequences = 0;
 uint64_t total_bases = 0;
 
+unordered_map<uint32_t, string> taxIDtoGenus;
+
+
 int main(int argc, char **argv, char **env) {
   #ifdef _OPENMP
   omp_set_num_threads(1);
   #endif
   
-initializePerlInterpreter(argc, argv, env);
-getNCBIdatabase();
+//initializePerlInterpreter(argc, argv, env);
+//getNCBIdatabase();
 
 cout << "classify main" << endl;  
 parse_command_line(argc, argv);
@@ -212,7 +219,7 @@ parse_command_line(argc, argv);
   gettimeofday(&tv2, NULL);
 
   report_stats(tv1, tv2);
-  exitPerlInterpreter();
+  //exitPerlInterpreter();
   
   return 0;
 }
@@ -246,7 +253,11 @@ void process_file(char *filename) {
 	DNASequenceReader *reader;
 	DNASequence dna;
 	unordered_map<string, unordered_map<uint64_t, int>> genusToKmerCounts;
-	
+	const char * genus_divergence_file = "divergence_file.div";
+	ofstream out;
+	out.open(genus_divergence_file);
+	out << "Genus,KLdivergence\n";
+  
 	if (Fastq_input)
 		reader = new FastqReader(file_str);
 	else
@@ -278,7 +289,7 @@ void process_file(char *filename) {
 			unclassified_output_ss.str("");
 		
 			for (size_t j = 0; j < work_unit.size(); j++) {
-				cout << "Got to sequence " << j << endl;
+				//cout << "Got to sequence " << j << endl;
 				unordered_map<string, unordered_map<uint64_t, int>> currentGenusToKmerCounts = 
 								classify_sequence( work_unit[j], kraken_output_ss,
 								classified_output_ss, unclassified_output_ss);
@@ -325,28 +336,32 @@ void process_file(char *filename) {
 				}
 			}
 		}  // end parallel section
-	cout << endl;
+	//cout << endl;
 	delete reader;
 	
 	//go through genusToKmerCounts and compute the KL divergence for each taxID/genus:
 	if (!genusToKmerCounts.empty()) {
 		for (auto &genusKmerCountsPair : genusToKmerCounts) {
-			cout << genusKmerCountsPair.first << endl;
+			//cout << genusKmerCountsPair.first << endl;
 			unordered_map<uint64_t, int> kmerCounts = genusToKmerCounts[genusKmerCountsPair.first];
 			int sum = accumulate(begin(kmerCounts), end(kmerCounts), 0, [](int prev, const pair<uint64_t,int>& p) { return prev+p.second; });
-			cout << "Size: " << kmerCounts.size() << endl;	
+			//cout << "Size: " << kmerCounts.size() << endl;	
 			double expectedRelFrequency = 1.0/kmerCounts.size();
-			cout << "Exp rel freq: " << expectedRelFrequency << endl;
+			//cout << "Exp rel freq: " << expectedRelFrequency << endl;
 			double KLdivergence = 0.0;
 			for (auto &kmerCount : kmerCounts) {
 				double kmerRelFrequency = (double)kmerCount.second/sum;
-				cout << kmerCount.first << " : " << kmerRelFrequency << endl;
+				//cout << kmerCount.first << " : " << kmerRelFrequency << endl;
 				KLdivergence += kmerRelFrequency * log(kmerRelFrequency/expectedRelFrequency);
 			}
-			cout << "KL divergence for " << genusKmerCountsPair.first << " : " << KLdivergence << endl;
+			//cout << "KL divergence for " << genusKmerCountsPair.first << " : " << KLdivergence << endl;
+			out << genusKmerCountsPair.first; 
+			out << ","; 
+			out << KLdivergence;
+			out << "\n";
 		}
 	}
-	
+	out.close();
 }
 
 unordered_map<string, unordered_map<uint64_t, int>> classify_sequence(DNASequence &dna, ostringstream &koss,
@@ -392,7 +407,7 @@ unordered_map<string, unordered_map<uint64_t, int>> classify_sequence(DNASequenc
 				//koss << Database.canonical_representation(*kmer_ptr) << " ";
 				taxon = val_ptr ? *val_ptr : 0;
 				if (taxon != 0 && taxon != 1 && taxon != 2) {
-					cout << "Assigned kmer to taxon " << taxon << endl;
+					//cout << "Assigned kmer to taxon " << taxon << endl;
 					count += 1;
 					uint64_t kmerIndex = Database.canonical_representation(*kmer_ptr);
 					//kmers.push_back(Database.canonical_representation(*kmer_ptr));
@@ -410,26 +425,22 @@ unordered_map<string, unordered_map<uint64_t, int>> classify_sequence(DNASequenc
 			taxa.push_back(taxon);
 		}
 	}
-	
-	cout << "Could assign " << count << " kmers" << endl;
-	/*
-	int count0 = count(ambig_list.begin(), ambig_list.end(), 0);
-	int count1 = count(ambig_list.begin(), ambig_list.end(), 1);
-	
-	cout << "0 occurs: " << count0 << " times" << endl;
-	cout << "1 occurs: " << count1 << " times" << endl;
-	*/
-	
+		
 	uint32_t call = 0;
 	if (Quick_mode)
 		call = hits >= Minimum_hit_count ? taxon : 0;
-	else
+	else {
 		call = resolve_tree(hit_counts, Parent_map);
-		
-	if (call && count >= totalKmers/2)
+		//
+	}
+	if (call != 0 && call != 1 && call != 2 && count >= totalKmers/2){
 		#pragma omp atomic
 		total_classified++;
-		
+		cout << "Sequence classified to tax ID " << call << endl;
+		if (total_classified % 100 == 0) {
+			cout << "Classified " << total_classified << endl;
+		}
+	}	
 	if (Print_unclassified || Print_classified) {
 		ostringstream *oss_ptr = call ? &coss : &uoss;
 		bool print = call ? Print_classified : Print_unclassified;
@@ -450,7 +461,7 @@ unordered_map<string, unordered_map<uint64_t, int>> classify_sequence(DNASequenc
 	if (! Print_kraken)
 		exit(1);
 
-	if (call && count >= totalKmers/2) {
+	if (call != 0 && call != 1 && call != 2 && count >= totalKmers/2) {
 		koss << endl;
 		koss << "C\t";
 	}
@@ -474,13 +485,67 @@ unordered_map<string, unordered_map<uint64_t, int>> classify_sequence(DNASequenc
 			koss << hitlist_string(taxa, ambig_list);
 	}
 	
-	if (call != 0 && count >= totalKmers/2) {
+	if (call != 0 && call != 1 && call != 2 && count >= totalKmers/2) {
 		//koss << endl << dnaHeader << endl;
 		//convert call (taxid) to genus prior to insertion into the map:
-		string genus = getGenusName(call);
-		cout << genus << endl;
-		genusToKmerCount[genus] = kmerIndexCount;
-		/*
+		//string genus = getGenusName(call);
+		
+		
+		//move inside if!!!!
+		string taxID;
+		ostringstream o;
+		o << call;
+		taxID += o.str();
+		
+		
+		if (taxIDtoGenus.find(call) == taxIDtoGenus.end()) {
+			int random = rand();
+			string randomStr;
+			ostringstream convert;
+			convert << random; 
+			randomStr = convert.str();
+			string genus_file = "/home/avoicu/genusFiles/genus_" + randomStr + ".txt";
+			
+			char command[200];
+			strcpy(command, "/home/avoicu/localperl/bin/perl /home/avoicu/kraken-orig/getGenus.pl ");
+			strcat(command, taxID.c_str());
+			strcat(command, " ");
+			strcat(command, genus_file.c_str());
+			
+			//cout << endl;
+			//return int
+			system(command);
+			//string genus;
+			ifstream infile(genus_file);
+			string genus;
+			getline(infile, genus);
+			cout << "Genus: " << genus << endl;
+			if (genus.compare("undef") != 0 && genus.compare("") != 0) {
+				genusToKmerCount[genus] = kmerIndexCount;
+				taxIDtoGenus.insert(pair<uint32_t, string>(call, genus));
+				//cout << "Identified genus: " << genus << endl;
+			}	
+			
+		}
+		else {
+			string genus = taxIDtoGenus[call];
+			genusToKmerCount[genus] = kmerIndexCount;
+		}
+		/*infile.seekg(0, infile.end);
+		int length = infile.tellg();
+		cout << "Length " << length << endl;
+		if (length != 0) {
+			string line;
+				getline(infile, line);
+				cout << line << endl;
+				string genus = line;
+			}
+			infile.close();
+		//note: close file then delete it using system(rm..);
+			
+		//}
+		
+		/*	
 		if (!kmers.empty()) {
 			copy(kmers.begin(), kmers.end()-1, ostream_iterator<uint64_t>(koss, " "));
 			//koss << "HERE: " << kmers.back() << endl;
@@ -498,10 +563,8 @@ unordered_map<string, unordered_map<uint64_t, int>> classify_sequence(DNASequenc
 				 
 			}
 		}*/
-		return genusToKmerCount;
-		
+		return genusToKmerCount;	
 	}
-
 	else {
 		return unordered_map<string, unordered_map<uint64_t, int>>();
 	}
