@@ -2,12 +2,11 @@ CXX = /illumina/thirdparty/gcc/gcc-4.9.2/bin/g++
 CXXENHANCEDFLAGS = -Wall -w -I/usr/local/include -I/home/avoicu/localperl/lib/5.22.0/x86_64-linux/CORE -L/home/avoicu/localperl/lib/5.22.0/x86_64-linux/CORE -fopenmp -O3 -std=c++11
 CXXFLAGS = -Wall -fopenmp -O3 -std=c++11
 PROGS = db_sort set_lcas classify make_seqid_to_taxid_map db_shrink
-PERLFLAGS = -lperl -lm -lcrypt
 
 .PHONY: all install clean
 	
-all: $(PROGS)
-
+all: $(PROGS) 
+	
 install: $(PROGS)
 	cp $(PROGS) /home/avoicu/kraken-orig/
 
@@ -21,7 +20,8 @@ db_sort: krakendb.o quickfile.o
 set_lcas: krakendb.o quickfile.o krakenutil.o seqreader.o
 
 classify: krakendb.o quickfile.o krakenutil.o seqreader.o
-	 $(CXX) $(CXXENHANCEDFLAGS) classify.cpp krakendb.o quickfile.o krakenutil.o seqreader.o -o classify $(PERLFLAGS)
+	 $(CXX) $(CXXENHANCEDFLAGS) classify.cpp krakendb.o quickfile.o krakenutil.o seqreader.o -o classify
+	 
 
 make_seqid_to_taxid_map: quickfile.o
 
