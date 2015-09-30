@@ -269,7 +269,7 @@ void classify_sequence(DNASequence &dna, ostringstream &koss,
 		call = resolve_tree(hit_counts, Parent_map);
 	}
 	
-	if ((call != 0) && (call != 1) && (call != 2) && (call != 10239) && (count >= totalKmers/2)){
+	if ((call != 0) && (count >= totalKmers/2)){
 		#pragma omp atomic 
 			total_classified++;
 		
