@@ -1,0 +1,4 @@
+kraken_output_dir=/illumina/scratch/tmp/users/avoicu/RERUN/subsamples/samplesCLL/subCLL/
+taxid_to_genus_filename=/illumina/scratch/tmp/users/avoicu/taxIdToGenus.txt
+kmer_length=31
+sequences_type=single
