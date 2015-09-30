@@ -8,7 +8,7 @@ PROGS = db_sort set_lcas classify make_seqid_to_taxid_map db_shrink
 all: $(PROGS) 
 	
 install: $(PROGS)
-	cp $(PROGS) /home/avoicu/kraken-orig/
+	cp $(PROGS) /home/avoicu/github/kraken/
 
 clean:
 	rm -f $(PROGS) *.o

@@ -25,12 +25,12 @@
 #include<unordered_map>
 #include <fstream>
 #include <sys/stat.h>
-#include "config_constants.hpp"
+#include "config_params.hpp"
 const size_t DEF_WORK_UNIT_SIZE = 500000;
 
 using namespace std;
 using namespace kraken;
-using namespace kraken_constants;
+using namespace configuration;
 //unordered_map<string, long long int> genusOccurrence;
 
 void parse_command_line(int argc, char **argv);
@@ -56,6 +56,12 @@ uint32_t Minimum_hit_count = 1;
 map<uint32_t, uint32_t> Parent_map;
 KrakenDB Database;
 string Classified_output_file, Unclassified_output_file, Kraken_output_file;
+
+string kraken_output_dir;
+string taxid_to_genus_filename;
+int kmer_length;
+string sequences_type;
+
 ostream *Classified_output;
 ostream *Unclassified_output;
 ostream *Kraken_output;
@@ -87,32 +93,39 @@ unordered_map<uint32_t, string> getTaxIDToGenus(const char * filename) {
 	return taxid_to_genus;
 }
 
-
 int main(int argc, char **argv) {
-  #ifdef _OPENMP
-  omp_set_num_threads(1);
-  #endif
+	#ifdef _OPENMP
+	omp_set_num_threads(1);
+	#endif
+	
+	struct config_parameters config;
+	readConfig(config);
+	
+	kraken_output_dir = config.kraken_output_dir;
+	taxid_to_genus_filename = config.taxid_to_genus_filename;
+	kmer_length = config.kmer_length;
+	sequences_type = config.sequences_type;
+	
+	parse_command_line(argc, argv);
+	if (! Nodes_filename.empty())
+		Parent_map = build_parent_map(Nodes_filename);
 
-  parse_command_line(argc, argv);
-  if (! Nodes_filename.empty())
-    Parent_map = build_parent_map(Nodes_filename);
+	if (Populate_memory)
+		cerr << "Loading database... ";
 
-  if (Populate_memory)
-    cerr << "Loading database... ";
+	QuickFile db_file;
+	db_file.open_file(DB_filename);
+	if (Populate_memory)
+		db_file.load_file();
+	Database = KrakenDB(db_file.ptr());
+	KmerScanner::set_k(Database.get_k());
 
-  QuickFile db_file;
-  db_file.open_file(DB_filename);
-  if (Populate_memory)
-    db_file.load_file();
-  Database = KrakenDB(db_file.ptr());
-  KmerScanner::set_k(Database.get_k());
-
-  QuickFile idx_file;
-  idx_file.open_file(Index_filename);
-  if (Populate_memory)
-    idx_file.load_file();
-  KrakenDBIndex db_index(idx_file.ptr());
-  Database.set_index(&db_index);
+	QuickFile idx_file;
+	idx_file.open_file(Index_filename);
+	if (Populate_memory)
+		idx_file.load_file();
+	KrakenDBIndex db_index(idx_file.ptr());
+	Database.set_index(&db_index);
 
   if (Populate_memory)
     cerr << "complete." << endl;
@@ -135,7 +148,6 @@ int main(int argc, char **argv) {
     if (Kraken_output_file == "-")
       Print_kraken = false;
     else {
-		//change this!!
 		Kraken_output = new ofstream(Kraken_output_file.c_str());
 	}		
   }
@@ -151,9 +163,9 @@ int main(int argc, char **argv) {
 		
 		string kraken_output_dir_path_str = fasta_file_dir + "ResultsFolder/"; 
 		mkdir(kraken_output_dir_path_str.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-        Kraken_output_file = kraken_output_dir_path_str + "Classification_output.kraken";
+        	Kraken_output_file = kraken_output_dir_path_str + "Classification_output.kraken";
 		Kraken_output = new ofstream(Kraken_output_file.c_str());
-    //Kraken_output = &cout;
+    		//Kraken_output = &cout;
   }
   struct timeval tv1, tv2;
   gettimeofday(&tv1, NULL);
@@ -208,7 +220,18 @@ void classify_sequence(DNASequence &dna, ostringstream &koss,
 	vector<uint64_t> kmers;
 	ofstream genus_kmers;
 	int count = 0;
-	int totalKmers = dna.seq.size() - kmer_length + 1;
+	
+	int totalKmers;
+	if (sequences_type.compare("single") == 0) {
+		totalKmers = dna.seq.size() - kmer_length + 1;	
+	}
+	else if (sequences_type.compare("paired") == 0) {
+		totalKmers = ((dna.seq.size() - 1)/2 - kmer_length + 1) * 2;
+	}
+	else {
+		cout << "Specify single/paired in the sequences_type field in the config file!" << endl;
+		exit(1);
+	}
 	
 	if (dna.seq.size() >= Database.get_k()) {
 		KmerScanner scanner(dna.seq);
@@ -226,7 +249,7 @@ void classify_sequence(DNASequence &dna, ostringstream &koss,
 									&current_min_pos, &current_max_pos
 									);
 				taxon = val_ptr ? *val_ptr : 0;
-				if ((taxon != 0) && (taxon != 1) && (taxon != 2) && (taxon != 10239)) {
+				if (taxon != 0) {
 					count += 1;
 					uint64_t kmerIndex = Database.canonical_representation(*kmer_ptr);
 					kmers.push_back(kmerIndex);
@@ -249,12 +272,9 @@ void classify_sequence(DNASequence &dna, ostringstream &koss,
 	if ((call != 0) && (call != 1) && (call != 2) && (call != 10239) && (count >= totalKmers/2)){
 		#pragma omp atomic 
 			total_classified++;
-			/*if (total_classified % 100 == 0) {
-				cout << "Classified " << total_classified << endl;
-			}
-			*/
 		
-	}	
+	}
+	
 	if (Print_unclassified || Print_classified) {
 		ostringstream *oss_ptr = call ? &coss : &uoss;
 		bool print = call ? Print_classified : Print_unclassified;
@@ -276,7 +296,6 @@ void classify_sequence(DNASequence &dna, ostringstream &koss,
 		exit(1);
 
 	if ((call != 0) && (call != 1) && (call != 2) && (call != 10239) && (count >= totalKmers/2)) {
-		koss << endl;
 		koss << "C\t";
 		
 	}
@@ -284,10 +303,10 @@ void classify_sequence(DNASequence &dna, ostringstream &koss,
 	else {
 		if (Only_classified_kraken_output)
 			return;
-		koss << endl;
+
 		koss << "U\t";
 	}
-	koss << dna.id << "\t" << dna.seq.size() << "\t";
+	koss << dna.id << "\t" << call << "\t" << dna.seq.size() << "\t";
 
 	if (Quick_mode) {
 		koss << "Q:" << hits;
@@ -300,36 +319,13 @@ void classify_sequence(DNASequence &dna, ostringstream &koss,
 			koss << hitlist_string(taxa, ambig_list);
 	}
 	
+	koss << endl;
+	
 	if ((call != 0) && (call != 1) && (call != 2) && (call != 10239) && (count >= totalKmers/2)) {
 		if (taxid_to_genus.find(call) != taxid_to_genus.end()) {
 			
 			string genus = taxid_to_genus[call];
 			if (genus.compare("undef") != 0 && genus.compare("") != 0) {
- 				/*if (genusOccurrence.find(genus) == genusOccurrence.end()) {
-					genusOccurrence.insert(pair<string, long long int>(genus, 1));
-					string genus_kmers_filename = "/illumina/scratch/tmp/users/avoicu/genusK/" + genus + "_1.txt";
-					genus_kmers.open(genus_kmers_filename);
-					for (auto &kmer: kmers) {
-						genus_kmers << kmer << " ";
-					}
-					genus_kmers.close();
-				}
-				else {
-					#pragma omp critical
-						genusOccurrence[genus]++;
-					
-					string occurrenceStr;
-					ostringstream convert;
-					convert << genusOccurrence[genus];
-					occurrenceStr = convert.str();
-					string genus_kmers_filename = "/illumina/scratch/tmp/users/avoicu/genusK/" + genus + "_" + occurrenceStr + ".txt";
-					genus_kmers.open(genus_kmers_filename);
-					for (auto &kmer: kmers) {
-						genus_kmers << kmer << " ";
-					}
-					genus_kmers.close();
-				}
-				*/
 
 				string threadNumStr = to_string( omp_get_thread_num() );
 				struct stat sb;
