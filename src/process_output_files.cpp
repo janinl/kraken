@@ -19,11 +19,11 @@
 #include<math.h>
 #include<algorithm>
 #include<omp.h>
-#include <sys/stat.h>
-#include "config_constants.hpp"
+#include<sys/stat.h>
+#include "config_params.hpp"
 
 using namespace std;
-using namespace kraken_constants;	
+using namespace configuration;	
 
 struct genus_divergence {
 	string genus;
@@ -130,11 +130,9 @@ void get_divergence_file(string kmer_dir_path_str) {
 	string kmer_dir_path_substr = kmer_dir_path_str.substr(0, kmer_dir_path_str.size()-1);
 	size_t delim = kmer_dir_path_substr.find_last_of("/");
 	string fasta_dir_path = kmer_dir_path_substr.substr(0,delim);
-	//cout << "fasta dir : " << fasta_dir_path << endl;
     
 	string results_dir_path_str = fasta_dir_path + "/ResultsFolder"; 
-	struct stat sb;
-	
+	struct stat sb;	
 	//check if the ResultsFolder exists and if so write output to divergence file:
 	if (stat(results_dir_path_str.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode)) {
 		ofstream divergence_file(results_dir_path_str + "/KLdivergence.div");
@@ -152,8 +150,8 @@ void get_divergence_file(string kmer_dir_path_str) {
 	}
 }
 
-	
-int main() {
+
+vector<string> get_kmer_dir_paths(string kraken_output_dir) {
 	
 	DIR *dir = opendir(kraken_output_dir.c_str());
 	vector<string> kmer_dir_paths;
@@ -162,10 +160,8 @@ int main() {
 	while (entry != NULL) {
 		if (entry -> d_type == DT_DIR) {
 			string fasta_dir_str(entry -> d_name);
-			//cout << fasta_dir_str << endl;
 			if ((fasta_dir_str != ".") && (fasta_dir_str != "..")) {
 				string kmer_dir_path_str = kraken_output_dir + fasta_dir_str + "/KmersFolder/";
-				//cout << kmer_dir_path_str << endl;
 				if (stat(kmer_dir_path_str.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode)) {
 					kmer_dir_paths.push_back(kmer_dir_path_str);
 				}
@@ -175,8 +171,18 @@ int main() {
 	}
 	closedir(dir);
 	
+	return kmer_dir_paths;
+}
+	
+int main() {
+	
+	struct config_parameters config;
+	readConfig(config);
+	
+	string kraken_output_dir = config.kraken_output_dir;
+	vector<string> kmer_dir_paths = get_kmer_dir_paths(kraken_output_dir);
+	
 	for (int i = 0; i < kmer_dir_paths.size(); i++) {
-		//cout << kmer_dir_paths[i] << endl;
 		get_divergence_file(kmer_dir_paths[i]);
 	}
 	
